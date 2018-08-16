@@ -6,30 +6,37 @@ import (
 )
 
 type Canal interface {
+	IsClosed() bool
 	Close()
-	CloseAndWait()
+	Wait()
 	Recv() (val interface{}, ok bool, opened bool)
 	Chan() chan<- interface{}
 	Len() int
 }
 
 type canalImpl struct {
-	closed chan bool
-	*sync.WaitGroup
+	closeChan chan struct{}
+	closeOnce sync.Once
+	sync.WaitGroup
 	*list.List
 	send chan<- interface{}
 	recv <-chan *list.Element
 }
 
 func (c *canalImpl) Close() {
-	close(c.closed)
-	close(c.send)
+	c.closeOnce.Do(func() {
+		close(c.closeChan)
+		// close(c.send)
+	})
 }
 
-func (c *canalImpl) CloseAndWait() {
-	close(c.closed)
-	close(c.send)
-	c.WaitGroup.Wait()
+func (c *canalImpl) IsClosed() bool {
+	select {
+	case <-c.closeChan:
+		return true
+	default:
+	}
+	return false
 }
 
 func (c *canalImpl) Chan() chan<- interface{} {
@@ -53,21 +60,20 @@ func New() Canal {
 	send := make(chan interface{})
 	recv := make(chan *list.Element)
 	c := &canalImpl{
-		make(chan bool),
-		&sync.WaitGroup{},
-		list.New(),
-		send,
-		recv,
+		closeChan: make(chan struct{}),
+		List:      list.New(),
+		send:      send,
+		recv:      recv,
 	}
+	c.WaitGroup.Add(1)
 	go func() {
 		for {
-			// select {
-			// case <-c.closed:
-			// 	goto closed
-			// default:
-			// }
+			if c.IsClosed() {
+				goto closed
+			}
+
 			select {
-			case <-c.closed:
+			case <-c.closeChan:
 				goto closed
 			case v, ok := <-send:
 				if ok {
@@ -91,6 +97,5 @@ func New() Canal {
 		close(recv)
 		c.WaitGroup.Done()
 	}()
-	c.WaitGroup.Add(1)
 	return c
 }

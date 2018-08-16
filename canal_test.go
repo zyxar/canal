@@ -1,10 +1,11 @@
 package canal_test
 
 import (
-	"."
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/zyxar/canal"
 )
 
 const (
@@ -81,7 +82,8 @@ func TestSendRecvWaitNonBlocking(t *testing.T) {
 			t.Error("invalid recv")
 		}
 	}
-	can.CloseAndWait()
+	can.Close()
+	can.Wait()
 	if _, _, opened := can.Recv(); opened {
 		t.Error("invalid recv")
 	}
@@ -118,7 +120,8 @@ func TestComprehensiveNonBlocking(t *testing.T) {
 	if can.Len() != 0 {
 		t.Errorf("canal length not correct: %d != %d", can.Len(), 0)
 	}
-	can.CloseAndWait()
+	can.Close()
+	can.Wait()
 	if _, _, opened := can.Recv(); opened {
 		t.Error("invalid recv")
 	}
