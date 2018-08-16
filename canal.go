@@ -6,13 +6,15 @@ import (
 )
 
 type Canal interface {
+	Pipe() (SendChan, RecvChan)
 	IsClosed() bool
 	Close()
 	Wait()
-	Recv() (val interface{}, ok bool, opened bool)
-	Chan() chan<- interface{}
 	Len() int
 }
+
+type SendChan chan<- interface{}
+type RecvChan <-chan interface{}
 
 type canalImpl struct {
 	closeChan chan struct{}
@@ -20,7 +22,7 @@ type canalImpl struct {
 	sync.WaitGroup
 	*list.List
 	send chan<- interface{}
-	recv <-chan *list.Element
+	recv <-chan interface{}
 }
 
 func (c *canalImpl) Close() {
@@ -39,26 +41,13 @@ func (c *canalImpl) IsClosed() bool {
 	return false
 }
 
-func (c *canalImpl) Chan() chan<- interface{} {
-	return c.send
-}
-
-func (c *canalImpl) Recv() (val interface{}, ok bool, opened bool) {
-	v, opened := <-c.recv
-	if !opened {
-		return
-	}
-	if v == nil {
-		return
-	}
-	ok = true
-	val = v.Value
-	return
+func (c *canalImpl) Pipe() (SendChan, RecvChan) {
+	return c.send, c.recv
 }
 
 func New() Canal {
 	send := make(chan interface{})
-	recv := make(chan *list.Element)
+	recv := make(chan interface{})
 	c := &canalImpl{
 		closeChan: make(chan struct{}),
 		List:      list.New(),
@@ -72,6 +61,12 @@ func New() Canal {
 				goto closed
 			}
 
+			front := c.Front()
+			var val interface{}
+			if front != nil {
+				val = front.Value
+			}
+
 			select {
 			case <-c.closeChan:
 				goto closed
@@ -81,16 +76,16 @@ func New() Canal {
 				} else {
 					goto closed
 				}
-			case recv <- c.Front():
-				if c.Front() != nil {
-					c.Remove(c.Front())
+			case recv <- val:
+				if front != nil {
+					c.Remove(front)
 				}
 			}
 		}
 	closed:
 		for c.List.Len() > 0 {
 			select {
-			case recv <- c.Front():
+			case recv <- c.Front().Value:
 				c.Remove(c.Front())
 			}
 		}
