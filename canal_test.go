@@ -16,10 +16,9 @@ func TestSendNonBlocking(t *testing.T) {
 	t.Parallel()
 	can := canal.New()
 	done := make(chan bool)
-	send, _ := can.Pipe()
 	go func() {
 		for i := 0; i < num; i++ {
-			send <- i
+			can.Send(i)
 		}
 		close(done)
 	}()
@@ -34,13 +33,12 @@ func TestSendNonBlocking(t *testing.T) {
 func TestRecvNonBlocking(t *testing.T) {
 	t.Parallel()
 	can := canal.New()
-	_, recv := can.Pipe()
 	done := make(chan bool)
 	go func() {
 		for i := 0; i < num; i++ {
-			v, ok := <-recv
-			if !ok || v != nil || can.IsClosed() {
-				t.Error("invalid recv")
+			v, err := can.Recv()
+			if err != canal.ErrCanalRecvNil || v != nil {
+				t.Error("invalid recv", v, err)
 			}
 		}
 		close(done)
@@ -56,34 +54,33 @@ func TestRecvNonBlocking(t *testing.T) {
 func TestSendRecvNonBlocking(t *testing.T) {
 	t.Parallel()
 	can := canal.New()
-	send, recv := can.Pipe()
 	for i := 0; i < num; i++ {
-		send <- i
+		if err := can.Send(i); err != nil {
+			t.Error(i, err.Error())
+		}
 	}
 	can.Close()
 	for i := 0; i < num; i++ {
-		v, ok := <-recv
-		if !ok || v == nil || v.(int) != i {
-			t.Error("invalid recv")
+		v, err := can.Recv()
+		if err != nil || v == nil || v.(int) != i {
+			t.Error("invalid recv", v, err)
 		}
 	}
-	<-time.After(time.Microsecond)
-	if !can.IsClosed() {
-		t.Error("invalid isclosed")
-	}
+	// can.Wait()
 }
 
 func TestSendRecvWaitNonBlocking(t *testing.T) {
 	t.Parallel()
 	can := canal.New()
-	send, recv := can.Pipe()
 	for i := 0; i < num; i++ {
-		send <- i
+		if err := can.Send(i); err != nil {
+			t.Error(i, err.Error())
+		}
 	}
 	for i := 0; i < num; i++ {
-		v, ok := <-recv
-		if !ok || v == nil || v.(int) != i {
-			t.Error("invalid recv")
+		v, err := can.Recv()
+		if err != nil || v == nil || v.(int) != i {
+			t.Error("invalid recv", v, err)
 		}
 	}
 	can.Close()
@@ -93,12 +90,13 @@ func TestSendRecvWaitNonBlocking(t *testing.T) {
 func TestComprehensiveNonBlocking(t *testing.T) {
 	t.Parallel()
 	can := canal.New()
-	send, recv := can.Pipe()
 	wg := &sync.WaitGroup{}
 	wg.Add(num)
 	for i := 0; i < num; i++ {
 		go func(i int) {
-			send <- i
+			if err := can.Send(i); err != nil {
+				t.Error(i, err.Error())
+			}
 			wg.Done()
 		}(i)
 	}
@@ -110,9 +108,9 @@ func TestComprehensiveNonBlocking(t *testing.T) {
 	wg.Add(num)
 	for i := 0; i < num; i++ {
 		go func(i int) {
-			v, ok := <-recv
-			if !ok || v == nil {
-				t.Error("invalid recv")
+			v, err := can.Recv()
+			if err != nil || v == nil {
+				t.Error("invalid recv", v, err)
 			}
 			wg.Done()
 		}(i)

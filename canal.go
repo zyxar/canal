@@ -2,52 +2,68 @@ package canal
 
 import (
 	"container/list"
+	"errors"
 	"sync"
 )
 
+var (
+	ErrCanalClosed  = errors.New("canal closed")         // returned when canal is closed
+	ErrCanalRecvNil = errors.New("canal recv value nil") // returned when there is nothing to be retrieved from canal
+)
+
 type Canal interface {
-	Pipe() (SendChan, RecvChan)
-	IsClosed() bool
-	Close()
+	Send(v interface{}) error   // chan<-
+	Recv() (interface{}, error) // <-chan
+	Len() int                   // len(chan)
+	Close()                     // close(chan)
 	Wait()
-	Len() int
 }
 
-type SendChan chan<- interface{}
-type RecvChan <-chan interface{}
-
 type canalImpl struct {
+	*list.List
+	send chan<- interface{}
+	recv <-chan *list.Element
+
 	closeChan chan struct{}
 	closeOnce sync.Once
 	sync.WaitGroup
-	*list.List
-	send chan<- interface{}
-	recv <-chan interface{}
 }
 
 func (c *canalImpl) Close() {
 	c.closeOnce.Do(func() {
 		close(c.closeChan)
-		// close(c.send)
 	})
 }
 
-func (c *canalImpl) IsClosed() bool {
+func (c *canalImpl) Send(v interface{}) error {
 	select {
 	case <-c.closeChan:
-		return true
+		return ErrCanalClosed
 	default:
 	}
-	return false
+
+	select {
+	case <-c.closeChan:
+		return ErrCanalClosed
+	case c.send <- v:
+		return nil
+	}
 }
 
-func (c *canalImpl) Pipe() (SendChan, RecvChan) {
-	return c.send, c.recv
+func (c *canalImpl) Recv() (interface{}, error) {
+	v, ok := <-c.recv
+	if !ok {
+		return nil, ErrCanalClosed
+	}
+	if v == nil {
+		return nil, ErrCanalRecvNil
+	}
+	return v.Value, nil
 }
 
 func New() Canal {
 	send := make(chan interface{})
-	recv := make(chan interface{})
+	recv := make(chan *list.Element)
 	c := &canalImpl{
 		closeChan: make(chan struct{}),
 		List:      list.New(),
@@ -57,37 +73,30 @@ func New() Canal {
 	c.WaitGroup.Add(1)
 	go func() {
 		for {
-			if c.IsClosed() {
-				goto closed
-			}
-
-			front := c.Front()
-			var val interface{}
-			if front != nil {
-				val = front.Value
+			select {
+			case <-c.closeChan:
+				goto cleanup
+			default:
 			}
 
 			select {
 			case <-c.closeChan:
-				goto closed
+				goto cleanup
 			case v, ok := <-send:
 				if ok {
 					c.PushBack(v)
-				} else {
-					goto closed
 				}
-			case recv <- val:
-				if front != nil {
-					c.Remove(front)
+			case recv <- c.Front():
+				if c.Front() != nil {
+					c.Remove(c.Front())
 				}
 			}
 		}
-	closed:
+	cleanup:
 		for c.List.Len() > 0 {
-			select {
-			case recv <- c.Front().Value:
-				c.Remove(c.Front())
-			}
+			val := c.Front()
+			recv <- val
+			c.Remove(val)
 		}
 		close(recv)
 		c.WaitGroup.Done()
