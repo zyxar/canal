@@ -4,6 +4,7 @@ import (
 	"container/list"
 	"errors"
 	"sync"
+	"sync/atomic"
 )
 
 var (
@@ -21,12 +22,17 @@ type Canal interface {
 
 type canalImpl struct {
 	*list.List
-	send chan<- interface{}
-	recv <-chan *list.Element
+	length int64
+	send   chan<- interface{}
+	recv   <-chan *list.Element
 
 	closeChan chan struct{}
 	closeOnce sync.Once
 	sync.WaitGroup
+}
+
+func (c *canalImpl) Len() int {
+	return int(atomic.LoadInt64(&c.length))
 }
 
 func (c *canalImpl) Close() {
@@ -85,10 +91,12 @@ func New() Canal {
 			case v, ok := <-send:
 				if ok {
 					c.PushBack(v)
+					atomic.AddInt64(&c.length, 1)
 				}
 			case recv <- c.Front():
 				if c.Front() != nil {
 					c.Remove(c.Front())
+					atomic.AddInt64(&c.length, -1)
 				}
 			}
 		}
@@ -97,6 +105,7 @@ func New() Canal {
 			val := c.Front()
 			recv <- val
 			c.Remove(val)
+			atomic.AddInt64(&c.length, -1)
 		}
 		close(recv)
 		c.WaitGroup.Done()
